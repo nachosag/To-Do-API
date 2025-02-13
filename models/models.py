@@ -1,17 +1,34 @@
-from sqlmodel import SQLModel, Relationship, Field
+from typing import List
+from pydantic import BaseModel
+from sqlmodel import Field, SQLModel
 
 
-class Task(SQLModel, table=True):
-    id: int = Field(primary_key=True)
-    title: str
-    description: str
-    owner_id: int | None = Field(foreign_key="user.id")
-    owner: "User" = Relationship(back_populates="tasks")
-
-
-class User(SQLModel, table=True):
-    id: int = Field(primary_key=True)
+class UserBase(SQLModel):
     email: str
     password: str
+
+
+class UserCreate(UserBase):
     name: str
-    tasks: list[Task] | None = Relationship(back_populates="owner")
+
+
+class TaskBase(SQLModel):
+    title: str
+    description: str
+
+
+# Database models
+class Task(TaskBase, table=True):
+    id: int = Field(default=None, primary_key=True)
+
+
+class User(UserCreate, table=True):
+    id: int = Field(default=None, primary_key=True)
+
+
+# Response models
+class PaginatedResponse(BaseModel):
+    tasks: List[Task]
+    total_tasks: int
+    page: int
+    limit: int
