@@ -5,9 +5,10 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from contextlib import asynccontextmanager
 import sqlalchemy
 from database import init_db, get_session
-from models.models import PaginatedResponse, UserBase, Task, UserCreate, TaskBase, User
+from models.models import PaginatedResponse, Task, UserCreate, TaskBase, User
 from sqlmodel import Session, func, select
 from jose import jwt
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -16,7 +17,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan, title="To-Do-List-API")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 SessionDep = Annotated[Session, Depends(get_session)]
 
 
@@ -25,20 +26,24 @@ def encode_token(payload: dict) -> str:
     return token
 
 
-def decode_token(session: SessionDep, token: Annotated[str, Depends(oauth2_scheme)]) -> dict:
+def decode_token(
+    session: SessionDep,
+    token: Annotated[str, Depends(oauth2_scheme)],
+) -> dict:
     data = jwt.decode(token, "my-secret", algorithms=["HS256"])
-    user = session.exec(
-        select(User).where(User.email == data["email"])
-    ).one()
+    user = session.exec(select(User).where(User.email == data["email"])).one()
     return user
 
 
+Token = Annotated[dict, Depends(decode_token)]
+
+
 @app.get("/users/profile")
-async def profile(my_user: Annotated[dict, Depends(decode_token)]):
-    return my_user
+async def profile(token: Token):
+    return token
 
 
-@app.post("/token")
+@app.post("/login")
 async def login(
     session: SessionDep, form_data: Annotated[OAuth2PasswordRequestForm, Depends()]
 ):
@@ -61,7 +66,10 @@ async def login(
 
 # tiene que retornar el token
 @app.post("/register", response_model=User)
-async def register_user(session: SessionDep, user: UserCreate):
+async def register_user(
+    session: SessionDep,
+    user: UserCreate,
+):
     data = User(
         email=user.email,
         password=user.password,
@@ -76,20 +84,27 @@ async def register_user(session: SessionDep, user: UserCreate):
 
 
 @app.get("/users", response_model=list[User])
-async def get_users(session: SessionDep):
+async def get_users(
+    session: SessionDep,
+    token: Token,
+):
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
     response = session.exec(select(User)).all()
 
     return response
 
 
-# tiene que retornar el token
-# @app.post("/login", response_model=str)
-# async def login_user(session: SessionDep, user: UserBase):
-#     pass
-
-
 @app.post("/todos", response_model=Task)
-async def create_task(session: SessionDep, task: TaskBase):
+async def create_task(
+    session: SessionDep,
+    token: Token,
+    task: TaskBase,
+):
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
     data = Task(
         title=task.title,
         description=task.description,
@@ -103,7 +118,9 @@ async def create_task(session: SessionDep, task: TaskBase):
 
 
 @app.put("/todos/{task_id}", response_model=Task)
-async def update_task(session: SessionDep, task: Task):
+async def update_task(session: SessionDep, token: Token, task: Task):
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
     try:
         data = session.exec(select(Task).where(Task.id == task.id)).one()
     except sqlalchemy.exc.NoResultFound:
@@ -120,7 +137,13 @@ async def update_task(session: SessionDep, task: Task):
 
 
 @app.delete("/todos/{task_id}")
-async def delete_task(session: SessionDep, task_id: int = Path(ge=1, le=100)):
+async def delete_task(
+    session: SessionDep,
+    token: Token,
+    task_id: int = Path(ge=1, le=100),
+):
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
     try:
         data = session.exec(select(Task).where(Task.id == task_id)).one()
     except sqlalchemy.exc.NoResultFound:
@@ -135,9 +158,12 @@ async def delete_task(session: SessionDep, task_id: int = Path(ge=1, le=100)):
 @app.get("/todos", response_model=PaginatedResponse)
 async def get_tasks(
     session: SessionDep,
+    token: Token,
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=10, ge=1, le=100),
 ):
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
     offset = (page - 1) * limit
 
     tasks = session.exec(select(Task).offset(offset).limit(limit)).all()
