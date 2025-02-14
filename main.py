@@ -1,11 +1,13 @@
-from typing import Annotated, List
-from fastapi import FastAPI, Depends, HTTPException, Query, Path
+from typing import Annotated
+from fastapi import FastAPI, Depends, Query, Path
+from fastapi.exceptions import HTTPException
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from contextlib import asynccontextmanager
 import sqlalchemy
 from database import init_db, get_session
-from models.models import PaginatedResponse, UserBase, Task, UserCreate, TaskBase
+from models.models import PaginatedResponse, UserBase, Task, UserCreate, TaskBase, User
 from sqlmodel import Session, func, select
-
+from jose import jwt
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -14,17 +16,76 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan, title="To-Do-List-API")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 SessionDep = Annotated[Session, Depends(get_session)]
 
 
-@app.post("/register", response_model=str)
+def encode_token(payload: dict) -> str:
+    token = jwt.encode(payload, "my-secret", algorithm="HS256")
+    return token
+
+
+def decode_token(session: SessionDep, token: Annotated[str, Depends(oauth2_scheme)]) -> dict:
+    data = jwt.decode(token, "my-secret", algorithms=["HS256"])
+    user = session.exec(
+        select(User).where(User.email == data["email"])
+    ).one()
+    return user
+
+
+@app.get("/users/profile")
+async def profile(my_user: Annotated[dict, Depends(decode_token)]):
+    return my_user
+
+
+@app.post("/token")
+async def login(
+    session: SessionDep, form_data: Annotated[OAuth2PasswordRequestForm, Depends()]
+):
+    try:
+        user = session.exec(
+            select(User).where(
+                (User.email == form_data.username)
+                & (User.password == form_data.password)
+            )
+        ).one()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Incorrect username or password")
+
+    token = encode_token({"username": user.name, "email": user.email})
+
+    return {
+        "access_token": token,
+    }
+
+
+# tiene que retornar el token
+@app.post("/register", response_model=User)
 async def register_user(session: SessionDep, user: UserCreate):
-    pass
+    data = User(
+        email=user.email,
+        password=user.password,
+        name=user.name,
+    )
+
+    session.add(data)
+    session.commit()
+    session.refresh(data)
+
+    return data
 
 
-@app.post("/login", response_model=str)
-async def login_user(session: SessionDep, user: UserBase):
-    pass
+@app.get("/users", response_model=list[User])
+async def get_users(session: SessionDep):
+    response = session.exec(select(User)).all()
+
+    return response
+
+
+# tiene que retornar el token
+# @app.post("/login", response_model=str)
+# async def login_user(session: SessionDep, user: UserBase):
+#     pass
 
 
 @app.post("/todos", response_model=Task)
